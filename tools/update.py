@@ -1,19 +1,44 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import glob, os, subprocess, sys
+import glob, os, re, subprocess, sys, requests
 from datetime import datetime
 
 SOURCES = {
-  "renfeld":   "https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip",
-  "cercanias": "https://ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip",
+  "renfeld":   "https://nap.transportes.gob.es/api/v2/fichero/1098/descarga",
+  "cercanias": "https://nap.transportes.gob.es/api/v2/fichero/1130/descarga",
 }
+
+def resolve_nap(api_url):
+  key = os.environ.get("NAP_API_KEY")
+  if not key:
+    raise RuntimeError("NAP_API_KEY not set")
+  r = requests.get(api_url, headers={"ApiKey": key})
+  r.raise_for_status()
+  payload = r.json()
+  if not payload.get("success"):
+    raise RuntimeError(payload.get("message", "API error"))
+  return payload["data"]["enlaceDescarga"]
+
+RESOLVERS = [
+  (r"^https://nap\.transportes\.gob\.es/", resolve_nap),
+  (r".*",                                   lambda url: url),
+]
+
+def resolve(url):
+  return next(fn for pattern, fn in RESOLVERS if re.match(pattern, url))(url)
 
 def latest_zip(basename):
   matches = sorted(glob.glob(f"data/{basename}_????-??-??_??-??.zip"))
   return matches[-1] if matches else None
 
-def run_dump(basename, url):
+def run_dump(basename, src):
+  try:
+    url = resolve(src)
+  except Exception as e:
+    print(f"\n[{basename}] resolve failed: {e}", file=sys.stderr)
+    return False
+
   ts       = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
   output   = f"data/{basename}_{ts}.zip"
   existing = latest_zip(basename)
